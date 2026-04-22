@@ -18,25 +18,25 @@ function authenticate(req, res, next) {
   });
 }
 
-// Helper: Validate campaign ownership or admin
+// Helper: Validate collection ownership or admin
 async function requireOwnershipOrAdmin(req, res, next) {
   try {
-    const campaign = await Collection.findById(req.params.campaignId);
-    if (!campaign) return res.status(404).json({ message: 'Campaign not found' });
+    const collection = await Collection.findById(req.params.collectionId);
+    if (!collection) return res.status(404).json({ message: 'Collection not found' });
     if (
-      campaign.creator.toString() !== req.user.userId &&
+      collection.creator.toString() !== req.user.userId &&
       req.user.role !== 'admin'
     ) {
       return res.status(403).json({ message: 'Unauthorized: Not owner or admin' });
     }
-    req.campaign = campaign;
+    req.collection = collection;
     next();
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 }
 
-// GET all campaigns: supports filtering, searching, and pagination
+// GET all collections: supports filtering, searching, and pagination
 router.get('/', async (req, res) => {
   try {
     const {
@@ -69,7 +69,7 @@ router.get('/', async (req, res) => {
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     // Query and count
-    const [campaigns, total] = await Promise.all([
+    const [collections, total] = await Promise.all([
       Collection.find(query)
         .sort(sort)
         .skip(skip)
@@ -79,76 +79,76 @@ router.get('/', async (req, res) => {
     ]);
 
     res.status(200).json({
-      message: 'Campaigns fetched',
+      message: 'Collections fetched',
       count: total,
       page: parseInt(page),
-      pageSize: campaigns.length,
+      pageSize: collections.length,
       totalPages: Math.ceil(total / limit),
-      data: campaigns
+      data: collections
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// GET one campaign by id
-router.get('/:campaignId', async (req, res) => {
+// GET one collection by id
+router.get('/:collectionId', async (req, res) => {
   try {
-    const campaign = await Collection.findById(req.params.campaignId)
+    const collection = await Collection.findById(req.params.collectionId)
       .populate('creator', 'firstname lastname email');
-    if (!campaign) {
-      return res.status(404).json({ message: 'Campaign not found' });
+    if (!collection) {
+      return res.status(404).json({ message: 'Collection not found' });
     }
-    res.status(200).json(campaign);
+    res.status(200).json(collection);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// POST create campaign (authenticated)
+// POST create collection (authenticated)
 router.post('/', authenticate, async (req, res) => {
   try {
     // Always use ID from token for creator to prevent forgery
-    const campaign = new Collection({
+    const collection = new Collection({
       ...req.body,
       creator: req.user.userId
     });
 
-    await campaign.save();
+    await collection.save();
     res.status(201).json({
-      message: 'Campaign created',
-      data: campaign
+      message: 'Collection created',
+      data: collection
     });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-// PATCH update a campaign (ownership required & prevent update if completed)
-router.patch('/:campaignId', authenticate, requireOwnershipOrAdmin, async (req, res) => {
+// PATCH update a collection (ownership required & prevent update if completed)
+router.patch('/:collectionId', authenticate, requireOwnershipOrAdmin, async (req, res) => {
   try {
-    // Do not allow updates if campaign is completed (custom business logic)
-    if (req.campaign.status === 'completed' && req.user.role !== 'admin') {
-      return res.status(403).json({ message: 'Completed campaigns cannot be edited.' });
+    // Do not allow updates if collection is completed (custom business logic)
+    if (req.collection.status === 'completed' && req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Completed collections cannot be edited.' });
     }
     // Only allow certain fields to be updated (optional: enforce stronger partial updates)
-    Object.assign(req.campaign, req.body);
+    Object.assign(req.collection, req.body);
 
-    await req.campaign.save();
+    await req.collection.save();
     res.status(200).json({
-      message: 'Campaign updated',
-      data: req.campaign
+      message: 'Collection updated',
+      data: req.collection
     });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-// DELETE campaign (ownership required)
-router.delete('/:campaignId', authenticate, requireOwnershipOrAdmin, async (req, res) => {
+// DELETE collection (ownership required)
+router.delete('/:collectionId', authenticate, requireOwnershipOrAdmin, async (req, res) => {
   try {
-    await Collection.findByIdAndDelete(req.params.campaignId);
-    res.status(200).json({ message: 'Campaign deleted' });
+    await Collection.findByIdAndDelete(req.params.collectionId);
+    res.status(200).json({ message: 'Collection deleted' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
