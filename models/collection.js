@@ -72,10 +72,9 @@ const CollectionSchema = new mongoose.Schema(
     supporters: { type: Number, default: 0 },
     status: {
       type: String,
-      enum: ['draft', 'pending', 'active', 'completed', 'rejected', 'suspended'],
-      default: 'pending'
+      enum: ['draft', 'active', 'completed', 'suspended'],
+      default: 'active'
     },
-    approvedAt: Date,
     deadline: {
       type: Date,
       validate: {
@@ -164,7 +163,7 @@ CollectionSchema.pre('save', function (next) {
   if (this.goal && this.raised >= this.goal && this.status === 'active') {
     this.status = 'completed';
   }
-  // next();
+  next();
 });
 
 module.exports = mongoose.model('Collection', CollectionSchema);

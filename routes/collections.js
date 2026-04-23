@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Collection = require('../models/collection');
+const User = require('../models/user');
 const jwt = require('jsonwebtoken');
 // const User = require('../models/user'); // Assumed path, should exist in your app
 
@@ -74,7 +75,7 @@ router.get('/', async (req, res) => {
         .sort(sort)
         .skip(skip)
         .limit(parseInt(limit))
-        .populate('creator', 'firstname lastname email'),
+        .populate('creator', 'name email role'),
       Collection.countDocuments(query)
     ]);
 
@@ -95,7 +96,7 @@ router.get('/', async (req, res) => {
 router.get('/:collectionId', async (req, res) => {
   try {
     const collection = await Collection.findById(req.params.collectionId)
-      .populate('creator', 'firstname lastname email');
+      .populate('creator', 'name email role');
     if (!collection) {
       return res.status(404).json({ message: 'Collection not found' });
     }
@@ -108,9 +109,21 @@ router.get('/:collectionId', async (req, res) => {
 // POST create collection (authenticated)
 router.post('/', authenticate, async (req, res) => {
   try {
+    const creator = await User.findById(req.user.userId).select('phoneVerified').exec();
+    if (!creator) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (!creator.phoneVerified) {
+      return res.status(403).json({
+        message: 'Phone verification is required before creating your first live collection.'
+      });
+    }
+
     // Always use ID from token for creator to prevent forgery
     const collection = new Collection({
       ...req.body,
+      status: req.body.status === 'draft' ? 'draft' : 'active',
       creator: req.user.userId
     });
 
