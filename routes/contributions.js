@@ -1,23 +1,8 @@
 const express = require('express');
-const jwt = require('jsonwebtoken');
 const router = express.Router();
 const Contribution = require('../models/contribution');
 const Collection = require('../models/collection');
-
-// Authentication middleware
-function authenticate(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ message: 'Missing or invalid authentication token.' });
-  }
-
-  const token = authHeader.split(' ')[1];
-  jwt.verify(token, process.env.JWT_KEY, (err, decoded) => {
-    if (err) return res.status(401).json({ message: 'Invalid or expired token.' });
-    req.user = decoded;
-    next();
-  });
-}
+const authenticate = require('../middleware/authenticate');
 
 // Authorization middleware for viewing collection contributions
 async function authorizeCollectionOwnerOrAdmin(req, res, next) {

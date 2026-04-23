@@ -2,22 +2,7 @@ const express = require('express');
 const router = express.Router();
 const Collection = require('../models/collection');
 const User = require('../models/user');
-const jwt = require('jsonwebtoken');
-// const User = require('../models/user'); // Assumed path, should exist in your app
-
-// Middleware: Authenticate user using JWT (Authorization: Bearer <token>)
-function authenticate(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ message: 'Missing or invalid authentication token.' });
-  }
-  const token = authHeader.split(' ')[1];
-  jwt.verify(token, process.env.JWT_KEY, (err, decoded) => {
-    if (err) return res.status(401).json({ message: 'Invalid or expired token.' });
-    req.user = decoded; // Should include user's _id and role
-    next();
-  });
-}
+const authenticate = require('../middleware/authenticate');
 
 // Helper: Validate collection ownership or admin
 async function requireOwnershipOrAdmin(req, res, next) {

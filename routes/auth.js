@@ -1,94 +1,18 @@
 var express = require('express');
-var jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 var router = express.Router();
 
+var authenticate = require('../middleware/authenticate');
+var requireAdmin  = require('../middleware/requireAdmin');
+var generateOtp   = require('../middleware/generateOtp');
+var sendSmsOtp    = require('../middleware/sendSmsOtp');
+
 const User = require('../models/user');
 
-function authenticate(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ message: 'Missing or invalid authentication token.' });
-  }
 
-  const token = authHeader.split(' ')[1];
-  jwt.verify(token, process.env.JWT_KEY, (err, decoded) => {
-    if (err) return res.status(401).json({ message: 'Invalid or expired token.' });
-    req.user = decoded;
-    next();
-  });
-}
 
-function generateOtp() {
-  return String(Math.floor(100000 + Math.random() * 900000));
-}
-
-async function sendSmsOtp(phoneNumber, otp) {
-  const provider = (process.env.SMS_PROVIDER || '').toLowerCase();
-  const message = `Your Crowdraise verification code is ${otp}. It expires in 10 minutes.`;
-
-  if (provider === 'twilio') {
-    const accountSid = process.env.TWILIO_ACCOUNT_SID;
-    const authToken = process.env.TWILIO_AUTH_TOKEN;
-    const from = process.env.TWILIO_PHONE_NUMBER;
-    if (!accountSid || !authToken || !from) {
-      throw new Error('Twilio is not configured. Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_PHONE_NUMBER.');
-    }
-
-    const body = new URLSearchParams({
-      To: phoneNumber,
-      From: from,
-      Body: message
-    });
-
-    const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString('base64')}`,
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      body
-    });
-
-    if (!response.ok) {
-      const err = await response.text();
-      throw new Error(`Twilio SMS failed: ${err}`);
-    }
-    return;
-  }
-
-  if (provider === 'termii') {
-    const apiKey = process.env.TERMII_API_KEY;
-    const from = process.env.TERMII_SENDER_ID || 'N-Alert';
-    if (!apiKey) {
-      throw new Error('Termii is not configured. Set TERMII_API_KEY.');
-    }
-
-    const response = await fetch('https://api.ng.termii.com/api/sms/send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        to: phoneNumber,
-        from,
-        sms: message,
-        type: 'plain',
-        channel: 'generic',
-        api_key: apiKey
-      })
-    });
-
-    if (!response.ok) {
-      const err = await response.text();
-      throw new Error(`Termii SMS failed: ${err}`);
-    }
-    return;
-  }
-
-  throw new Error('SMS_PROVIDER must be set to "twilio" or "termii".');
-}
-
-// GET all users
-router.get('/users', (req, res, next) => {
+// GET all users - now restricted to admins only
+router.get('/users', authenticate, requireAdmin, (req, res, next) => {
   User.find().select('-password')
   .exec()
   .then(users => {
@@ -103,24 +27,24 @@ router.get('/users', (req, res, next) => {
   })
 })
 
-// GET user details
-router.get('/user/:userId', (req, res, next) => {
+// GET user details - user can see self OR admin can see any
+router.get('/user/:userId', authenticate, async (req, res, next) => {
   const id = req.params.userId;
-  User.findById(id)
-  .exec()
-  .then(user => {
+
+  // Allow if requesting own info, or if admin
+  if (req.user.userId !== id && req.user.role !== 'admin') {
+    return res.status(403).json({ message: 'Forbidden. You can only access your own details.' });
+  }
+
+  try {
+    const user = await User.findById(id).select('-password -phoneOtp').exec();
     if (!user) {
-      return res.status(404).json({
-        message: 'User not found'
-      })
+      return res.status(404).json({ message: 'User not found' });
     }
-    res.status(200).json({
-      user
-    })
-  })
-  .catch(err => {
+    res.status(200).json({ user });
+  } catch (err) {
     res.status(500).json({ error: err.message });
-  })
+  }
 })
 
 // POST create user

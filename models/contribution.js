@@ -58,7 +58,8 @@ const ContributionSchema = new mongoose.Schema(
     verifiedAt: Date
   },
   {
-    timestamps: true
+    timestamps: true,
+    suppressReservedKeysWarning: true
   }
 );
 
@@ -66,7 +67,6 @@ ContributionSchema.index({ collection: 1, status: 1 });
 ContributionSchema.index({ collection: 1, createdAt: -1 });
 ContributionSchema.index({ supporter: 1, status: 1 });
 ContributionSchema.index({ collectionCreator: 1, status: 1 });
-ContributionSchema.index({ paystackReference: 1 }, { unique: true });
 ContributionSchema.index({ status: 1, createdAt: -1 });
 
 ContributionSchema.statics.confirmAndUpdateCounters = async function (contributionId) {
