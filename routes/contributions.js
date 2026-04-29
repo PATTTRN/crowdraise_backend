@@ -4,6 +4,7 @@ const Contribution = require('../models/contribution');
 const Collection = require('../models/collection');
 const User = require('../models/user');
 const authenticate = require('../middleware/authenticate');
+const { verifyPaystackTransaction } = require('../middleware/paystack');
 
 // Authorization middleware for viewing collection contributions
 async function authorizeCollectionOwnerOrAdmin(req, res, next) {
@@ -91,13 +92,33 @@ router.post('/', async (req, res) => {
 // POST confirm contribution (after provider verification)
 router.post('/:contributionId/confirm', async (req, res) => {
   try {
-    const contribution = await Contribution.confirmAndUpdateCounters(req.params.contributionId);
-    if (!contribution) {
-      return res.status(200).json({
-        message: 'Contribution already processed or not found'
+    const contributionRecord = await Contribution.findById(req.params.contributionId);
+    if (!contributionRecord) {
+      return res.status(404).json({ message: 'Contribution record not found' });
+    }
+
+    if (contributionRecord.status === 'completed') {
+      return res.status(200).json({ message: 'Contribution already confirmed', data: contributionRecord });
+    }
+
+    // Verify with Paystack using abstracted utility
+    const paystackResponse = await verifyPaystackTransaction(contributionRecord.paystackReference);
+
+    if (!paystackResponse.status || paystackResponse.data.status !== 'success') {
+      return res.status(400).json({ 
+        message: 'Payment verification failed', 
+        details: paystackResponse.message || 'Transaction not successful' 
       });
     }
 
+    // Verify amount matches (Paystack amount is in kobo)
+    const expectedAmountKobo = contributionRecord.amount * 100;
+    if (paystackResponse.data.amount !== expectedAmountKobo) {
+       return res.status(400).json({ message: 'Payment amount mismatch' });
+    }
+
+    const contribution = await Contribution.confirmAndUpdateCounters(req.params.contributionId);
+    
     res.status(200).json({
       message: 'Contribution confirmed',
       data: contribution
