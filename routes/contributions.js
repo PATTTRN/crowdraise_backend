@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const Contribution = require('../models/contribution');
 const Collection = require('../models/collection');
+const User = require('../models/user');
 const authenticate = require('../middleware/authenticate');
 
 // Authorization middleware for viewing collection contributions
@@ -24,9 +25,24 @@ async function authorizeCollectionOwnerOrAdmin(req, res, next) {
   }
 }
 
+
+
 // POST initialize contribution record (before payment verify)
-router.post('/', authenticate, async (req, res) => {
+router.post('/', async (req, res) => {
   try {
+    let supporterId = null;
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const jwt = require('jsonwebtoken');
+      try {
+        const token = authHeader.split(' ')[1];
+        const decoded = jwt.verify(token, process.env.JWT_KEY);
+        supporterId = decoded.userId;
+      } catch (err) {
+        // Token invalid or expired, proceed as guest
+      }
+    }
+
     const {
       collectionId,
       amount,
@@ -34,7 +50,8 @@ router.post('/', authenticate, async (req, res) => {
       isAnonymous = false,
       supporterName,
       supporterEmail,
-      currency = 'NGN'
+      currency = 'NGN',
+      paystackReference
     } = req.body;
 
     const collection = await Collection.findById(collectionId).exec();
@@ -42,19 +59,23 @@ router.post('/', authenticate, async (req, res) => {
       return res.status(404).json({ message: 'Collection not found' });
     }
 
+    if (!paystackReference || typeof paystackReference !== 'string') {
+      return res.status(400).json({ message: 'paystackReference is required and must be a string.' });
+    }
+
     const contribution = new Contribution({
       collection: collection._id,
       collectionTitle: collection.title,
       collectionType: collection.type,
       collectionCreator: collection.creator,
-      supporter: isAnonymous ? null : req.user.userId,
+      supporter: isAnonymous ? null : supporterId,
       supporterName,
       supporterEmail,
       isAnonymous,
       message,
       amount,
       currency,
-      paystackReference: `cr_${collection._id}_${Date.now()}`
+      paystackReference
     });
 
     await contribution.save();
@@ -68,7 +89,7 @@ router.post('/', authenticate, async (req, res) => {
 });
 
 // POST confirm contribution (after provider verification)
-router.post('/:contributionId/confirm', authenticate, async (req, res) => {
+router.post('/:contributionId/confirm', async (req, res) => {
   try {
     const contribution = await Contribution.confirmAndUpdateCounters(req.params.contributionId);
     if (!contribution) {

@@ -93,15 +93,16 @@ router.get('/:collectionId', async (req, res) => {
 
 // POST create collection (authenticated)
 router.post('/', authenticate, async (req, res) => {
+  console.log("hrereeer", req.user)
   try {
-    const creator = await User.findById(req.user.userId).select('phoneVerified').exec();
+    const creator = await User.findById(req.user.userId).select('emailVerified').exec();
     if (!creator) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    if (!creator.phoneVerified) {
+    if (!creator.emailVerified) {
       return res.status(403).json({
-        message: 'Phone verification is required before creating your first live collection.'
+        message: 'Email verification is required before creating your first live collection.'
       });
     }
 

@@ -159,11 +159,10 @@ CollectionSchema.index(
   { name: 'collection_search' }
 );
 
-CollectionSchema.pre('save', function (next) {
+CollectionSchema.pre('save', function () {
   if (this.goal && this.raised >= this.goal && this.status === 'active') {
     this.status = 'completed';
   }
-  next();
 });
 
 module.exports = mongoose.model('Collection', CollectionSchema);

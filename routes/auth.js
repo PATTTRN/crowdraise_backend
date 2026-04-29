@@ -1,17 +1,18 @@
 var express = require('express');
 const bcrypt = require('bcrypt');
 var router = express.Router();
+var jwt = require('jsonwebtoken');
 
-var authenticate = require('../middleware/authenticate');
-var requireAdmin  = require('../middleware/requireAdmin');
-var generateOtp   = require('../middleware/generateOtp');
-var sendSmsOtp    = require('../middleware/sendSmsOtp');
+var authenticate   = require('../middleware/authenticate');
+var requireAdmin   = require('../middleware/requireAdmin');
+var generateOtp    = require('../middleware/generateOtp');
+var sendEmailOtp   = require('../middleware/sendEmailOtp');
 
 const User = require('../models/user');
 
 
 
-// GET all users - now restricted to admins only
+// GET all users - restricted to admins only
 router.get('/users', authenticate, requireAdmin, (req, res, next) => {
   User.find().select('-password')
   .exec()
@@ -37,7 +38,7 @@ router.get('/user/:userId', authenticate, async (req, res, next) => {
   }
 
   try {
-    const user = await User.findById(id).select('-password -phoneOtp').exec();
+    const user = await User.findById(id).select('-password -emailOtp').exec();
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -61,7 +62,6 @@ router.post('/register', async (req, res, next) => {
       name: req.body.name,
       email: req.body.email,
       password: req.body.password,
-      phoneNumber: req.body.phoneNumber,
       role: req.body.role || 'user',
       location: req.body.country
     });
@@ -74,7 +74,7 @@ router.post('/register', async (req, res, next) => {
         name: result.name,
         email: result.email,
         role: result.role,
-        phoneVerified: result.phoneVerified
+        emailVerified: result.emailVerified
       }
     });
   } catch (err) {
@@ -119,7 +119,7 @@ router.post('/login', async (req, res, next) => {
         name: user.name,
         email: user.email,
         role: user.role,
-        phoneVerified: user.phoneVerified
+        emailVerified: user.emailVerified
       }
     });
   } catch (err) {
@@ -127,55 +127,55 @@ router.post('/login', async (req, res, next) => {
   }
 });
 
-// POST send phone verification OTP
-router.post('/phone/send-otp', authenticate, async (req, res) => {
+// POST send email verification OTP
+router.post('/email/send-otp', authenticate, async (req, res) => {
   try {
     const user = await User.findById(req.user.userId).exec();
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // before generating a new OTP
-    if (user.phoneOtp?.expiresAt) {
-      const secondsOld = (Date.now() - (user.phoneOtp.expiresAt - 10 * 60 * 1000)) / 1000;
+    if (user.emailVerified) {
+      return res.status(400).json({ message: 'Email is already verified.' });
+    }
+
+    // Rate-limit: one OTP per 60 seconds
+    if (user.emailOtp?.expiresAt) {
+      const secondsOld = (Date.now() - (user.emailOtp.expiresAt - 10 * 60 * 1000)) / 1000;
       if (secondsOld < 60) {
         return res.status(429).json({ message: 'Please wait 60 seconds before requesting another code.' });
       }
     }
 
-    const phoneNumber = req.body.phoneNumber || user.phoneNumber;
-    if (!phoneNumber) {
-      return res.status(400).json({ message: 'phoneNumber is required.' });
-    }
-
     const otp = generateOtp();
-    user.phoneNumber = phoneNumber;
-    user.phoneOtp = {
+    user.emailOtp = {
       code: await bcrypt.hash(otp, 10),
-      expiresAt: new Date(Date.now() + 10 * 60 * 1000)
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+      attempts: 0
     };
     await user.save();
 
     try {
-      await sendSmsOtp(phoneNumber, otp);
+      await sendEmailOtp(user.email, otp);
     } catch (providerError) {
+      console.error('[email/send-otp] Email provider error:', providerError.message);
       if (process.env.NODE_ENV !== 'production') {
         return res.status(200).json({
-          message: 'OTP generated. SMS provider unavailable, using dev fallback.',
+          message: 'OTP generated. Email provider unavailable, using dev fallback.',
           devOtp: otp
         });
       }
       throw providerError;
     }
 
-    res.status(200).json({ message: 'OTP sent successfully.' });
+    res.status(200).json({ message: 'Verification code sent to your email.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// POST verify phone OTP
-router.post('/phone/verify-otp', authenticate, async (req, res) => {
+// POST verify email OTP
+router.post('/email/verify-otp', authenticate, async (req, res) => {
   try {
     const { otp } = req.body;
     if (!otp) {
@@ -187,41 +187,44 @@ router.post('/phone/verify-otp', authenticate, async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    if (!user.phoneOtp || !user.phoneOtp.code || !user.phoneOtp.expiresAt) {
+    if (user.emailVerified) {
+      return res.status(400).json({ message: 'Email is already verified.' });
+    }
+
+    if (!user.emailOtp?.code || !user.emailOtp?.expiresAt) {
       return res.status(400).json({ message: 'No OTP request found. Please request a new code.' });
     }
 
-    if (user.phoneOtp.expiresAt < new Date()) {
-      user.phoneOtp = undefined;
+    if (user.emailOtp.expiresAt < new Date()) {
+      user.emailOtp = undefined;
       await user.save();
       return res.status(400).json({ message: 'OTP has expired. Please request a new code.' });
     }
 
-    if (user.phoneOtp.attempts >= 3) {
-      user.phoneOtp = undefined;
+    if (user.emailOtp.attempts >= 3) {
+      user.emailOtp = undefined;
       await user.save();
       return res.status(400).json({ message: 'Too many attempts. Please request a new code.' });
     }
 
-    user.phoneOtp.attempts += 1;
+    user.emailOtp.attempts += 1;
     await user.save();
 
-    const isValidOtp = await bcrypt.compare(String(otp), user.phoneOtp.code);
-
+    const isValidOtp = await bcrypt.compare(String(otp), user.emailOtp.code);
     if (!isValidOtp) {
       return res.status(400).json({ message: 'Invalid OTP.' });
     }
 
-    user.phoneVerified = true;
-    user.phoneOtp = undefined;
+    user.emailVerified = true;
+    user.emailOtp = undefined;
     await user.save();
 
-    res.status(200).json({ message: 'Phone number verified successfully.' });
+    res.status(200).json({ message: 'Email verified successfully.' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// POST user logout (to be handled on frontend by deleting token)
+// POST user logout (handled on frontend by deleting token)
 
 module.exports = router;
