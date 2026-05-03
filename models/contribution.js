@@ -41,6 +41,20 @@ const ContributionSchema = new mongoose.Schema(
       required: [true, 'Amount is required'],
       min: [100, 'Minimum contribution is 100']
     },
+    feePercentage: {
+      type: Number,
+      required: true
+    },
+    platformFee: {
+      type: Number,
+      required: true,
+      min: 0
+    },
+    netAmount: {
+      type: Number,
+      required: true,
+      min: 0
+    },
     currency: { type: String, default: 'NGN' },
     paystackReference: {
       type: String,
@@ -91,7 +105,7 @@ ContributionSchema.statics.confirmAndUpdateCounters = async function (contributi
       contribution.collection,
       {
         $inc: {
-          raised: contribution.amount,
+          raised: contribution.netAmount, // Track net amount (after platform fee)
           supporters: 1
         }
       },

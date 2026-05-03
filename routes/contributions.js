@@ -4,7 +4,22 @@ const Contribution = require('../models/contribution');
 const Collection = require('../models/collection');
 const User = require('../models/user');
 const authenticate = require('../middleware/authenticate');
+const requireAdmin = require('../middleware/requireAdmin');
 const { verifyPaystackTransaction } = require('../middleware/paystack');
+
+// Platform fee rates per collection type (as percentages)
+const PLATFORM_FEE_RATES = {
+  fundraiser: 1,  // 1%
+  occasion: 3,    // 3%
+  tips: 3         // 3%
+};
+
+function calculateFees(amount, collectionType) {
+  const feePercentage = PLATFORM_FEE_RATES[collectionType] ?? 3;
+  const platformFee = parseFloat(((amount * feePercentage) / 100).toFixed(2));
+  const netAmount = parseFloat((amount - platformFee).toFixed(2));
+  return { feePercentage, platformFee, netAmount };
+}
 
 // Authorization middleware for viewing collection contributions
 async function authorizeCollectionOwnerOrAdmin(req, res, next) {
@@ -64,6 +79,13 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ message: 'paystackReference is required and must be a string.' });
     }
 
+    const grossAmount = parseFloat(amount);
+    if (isNaN(grossAmount) || grossAmount <= 0) {
+      return res.status(400).json({ message: 'amount must be a positive number.' });
+    }
+
+    const { feePercentage, platformFee, netAmount } = calculateFees(grossAmount, collection.type);
+
     const contribution = new Contribution({
       collection: collection._id,
       collectionTitle: collection.title,
@@ -74,7 +96,10 @@ router.post('/', async (req, res) => {
       supporterEmail,
       isAnonymous,
       message,
-      amount,
+      amount: grossAmount,
+      feePercentage,
+      platformFee,
+      netAmount,
       currency,
       paystackReference
     });
@@ -111,10 +136,10 @@ router.post('/:contributionId/confirm', async (req, res) => {
       });
     }
 
-    // Verify amount matches (Paystack amount is in kobo)
+    // Verify gross amount matches what Paystack received (Paystack amount is in kobo)
     const expectedAmountKobo = contributionRecord.amount * 100;
     if (paystackResponse.data.amount !== expectedAmountKobo) {
-       return res.status(400).json({ message: 'Payment amount mismatch' });
+      return res.status(400).json({ message: 'Payment amount mismatch' });
     }
 
     const contribution = await Contribution.confirmAndUpdateCounters(req.params.contributionId);
@@ -141,6 +166,52 @@ router.get('/collection/:collectionId', authenticate, authorizeCollectionOwnerOr
     res.status(200).json({
       count: contributions.length,
       data: contributions
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET admin platform revenue summary (admin only)
+router.get('/admin/revenue', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const [overall] = await Contribution.aggregate([
+      { $match: { status: 'completed' } },
+      {
+        $group: {
+          _id: null,
+          totalPlatformRevenue: { $sum: '$platformFee' },
+          totalGrossDonated:    { $sum: '$amount' },
+          totalNetToCreators:   { $sum: '$netAmount' },
+          totalContributions:   { $sum: 1 }
+        }
+      },
+      { $project: { _id: 0 } }
+    ]);
+
+    const byType = await Contribution.aggregate([
+      { $match: { status: 'completed' } },
+      {
+        $group: {
+          _id: '$collectionType',
+          platformRevenue:  { $sum: '$platformFee' },
+          grossDonated:     { $sum: '$amount' },
+          netToCreators:    { $sum: '$netAmount' },
+          contributions:    { $sum: 1 },
+          feePercentage:    { $first: '$feePercentage' }
+        }
+      },
+      { $project: { _id: 0, type: '$_id', platformRevenue: 1, grossDonated: 1, netToCreators: 1, contributions: 1, feePercentage: 1 } }
+    ]);
+
+    res.status(200).json({
+      summary: overall || {
+        totalPlatformRevenue: 0,
+        totalGrossDonated: 0,
+        totalNetToCreators: 0,
+        totalContributions: 0
+      },
+      byType
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
