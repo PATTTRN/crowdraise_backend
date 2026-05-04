@@ -1,19 +1,45 @@
-const verifyPaystackTransaction = async (reference) => {
-  const response = await fetch(
-    `https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`,
-    {
+const https = require('https');
+
+const verifyPaystackTransaction = (reference) => {
+  const paystackSecretKey = process.env.PAYSTACK_SECRET_KEY;
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: 'api.paystack.co',
+      port: 443,
+      path: `/transaction/verify/${encodeURIComponent(reference)}`,
       method: 'GET',
       headers: {
-        Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`
-      }
-    }
-  );
+        Authorization: `Bearer ${paystackSecretKey}`,
+      },
+    };
 
-  if (!response.ok) {
-    throw new Error(`Paystack verification failed: ${response.status}`);
-  }
+    const req = https.request(options, (res) => {
+      let data = '';
 
-  return response.json();
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+
+      res.on('end', () => {
+        try {
+          const jsonData = JSON.parse(data);
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resolve(jsonData);
+          } else {
+            reject(new Error(`Paystack verification failed: ${res.statusCode} - ${jsonData.message || data}`));
+          }
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+
+    req.on('error', (error) => {
+      reject(error);
+    });
+
+    req.end();
+  });
 };
 
 module.exports = { verifyPaystackTransaction };
