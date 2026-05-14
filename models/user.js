@@ -54,7 +54,14 @@ const UserSchema = new mongoose.Schema(
     isActive: { type: Boolean, default: true },
     passwordChangedAt: Date,
     passwordResetToken: String,
-    passwordResetExpires: Date
+    passwordResetExpires: Date,
+    // Saved bank account for withdrawals — populated when creator adds bank details
+    bankDetails: {
+      accountNumber: { type: String, trim: true },
+      bankCode: { type: String, trim: true },
+      accountName: { type: String, trim: true },
+      bankName: { type: String, trim: true }
+    }
   },
   {
     timestamps: true

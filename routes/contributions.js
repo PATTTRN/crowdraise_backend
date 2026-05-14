@@ -5,7 +5,7 @@ const Collection = require('../models/collection');
 const User = require('../models/user');
 const authenticate = require('../middleware/authenticate');
 const requireAdmin = require('../middleware/requireAdmin');
-const { verifyPaystackTransaction } = require('../middleware/paystack');
+const { verifyPaystackTransaction, initializePaystackTransaction } = require('../middleware/paystack');
 
 // Platform fee rates per collection type (as percentages)
 const PLATFORM_FEE_RATES = {
@@ -21,29 +21,7 @@ function calculateFees(amount, collectionType) {
   return { feePercentage, platformFee, netAmount };
 }
 
-// Authorization middleware for viewing collection contributions
-async function authorizeCollectionOwnerOrAdmin(req, res, next) {
-  try {
-    const collection = await Collection.findById(req.params.collectionId || req.body.collectionId || req.query.collectionId);
-    if (!collection) return res.status(404).json({ message: 'Collection not found' });
-
-    // Must be the creator or admin
-    if (
-      collection.creator.toString() !== req.user.userId &&
-      req.user.role !== 'admin'
-    ) {
-      return res.status(403).json({ message: 'Unauthorized: Only the collection owner or admins can view contributions.' });
-    }
-    req.collection = collection;
-    next();
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-}
-
-
-
-// POST initialize contribution record (before payment verify)
+// POST initialize contribution record
 router.post('/', async (req, res) => {
   try {
     let supporterId = null;
@@ -66,8 +44,7 @@ router.post('/', async (req, res) => {
       isAnonymous = false,
       supporterName,
       supporterEmail,
-      currency = 'NGN',
-      paystackReference
+      currency = 'NGN'
     } = req.body;
 
     const collection = await Collection.findById(collectionId).exec();
@@ -75,14 +52,24 @@ router.post('/', async (req, res) => {
       return res.status(404).json({ message: 'Collection not found' });
     }
 
-    if (!paystackReference || typeof paystackReference !== 'string') {
-      return res.status(400).json({ message: 'paystackReference is required and must be a string.' });
-    }
-
     const grossAmount = parseFloat(amount);
     if (isNaN(grossAmount) || grossAmount <= 0) {
       return res.status(400).json({ message: 'amount must be a positive number.' });
     }
+
+    // Call Paystack initialization from backend
+    const paystackData = {
+      email: supporterEmail,
+      amount: Math.round(grossAmount * 100), // convert to kobo
+      metadata: {
+        collectionId,
+        supporterName,
+        isAnonymous,
+        message
+      }
+    };
+
+    const paystackInit = await initializePaystackTransaction(paystackData);
 
     const { feePercentage, platformFee, netAmount } = calculateFees(grossAmount, collection.type);
 
@@ -101,20 +88,21 @@ router.post('/', async (req, res) => {
       platformFee,
       netAmount,
       currency,
-      paystackReference
+      paystackReference: paystackInit.data.reference
     });
 
     await contribution.save();
     res.status(201).json({
       message: 'Contribution initialized',
-      data: contribution
+      data: contribution,
+      access_code: paystackInit.data.access_code // For frontend Popup
     });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-// POST confirm contribution (after provider verification)
+// POST confirm contribution
 router.post('/:contributionId/confirm', async (req, res) => {
   try {
     const contributionRecord = await Contribution.findById(req.params.contributionId);
@@ -126,7 +114,6 @@ router.post('/:contributionId/confirm', async (req, res) => {
       return res.status(200).json({ message: 'Contribution already confirmed', data: contributionRecord });
     }
 
-    // Verify with Paystack using abstracted utility
     const paystackResponse = await verifyPaystackTransaction(contributionRecord.paystackReference);
 
     if (!paystackResponse.status || paystackResponse.data.status !== 'success') {
@@ -136,7 +123,6 @@ router.post('/:contributionId/confirm', async (req, res) => {
       });
     }
 
-    // Verify gross amount matches what Paystack received (Paystack amount is in kobo)
     const expectedAmountKobo = contributionRecord.amount * 100;
     if (paystackResponse.data.amount !== expectedAmountKobo) {
       return res.status(400).json({ message: 'Payment amount mismatch' });
@@ -153,13 +139,14 @@ router.post('/:contributionId/confirm', async (req, res) => {
   }
 });
 
-// GET collection contributions (authentication and authorization required)
-router.get('/collection/:collectionId', authenticate, authorizeCollectionOwnerOrAdmin, async (req, res) => {
+// GET collection contributions (Public)
+router.get('/collection/:collectionId', async (req, res) => {
   try {
     const contributions = await Contribution.find({
       collection: req.params.collectionId,
       status: 'completed'
     })
+      .select('supporterName amount message createdAt isAnonymous')
       .sort({ createdAt: -1 })
       .exec();
 
@@ -172,7 +159,7 @@ router.get('/collection/:collectionId', authenticate, authorizeCollectionOwnerOr
   }
 });
 
-// GET admin platform revenue summary (admin only)
+// GET admin platform revenue summary
 router.get('/admin/revenue', authenticate, requireAdmin, async (req, res) => {
   try {
     const [overall] = await Contribution.aggregate([
@@ -213,6 +200,19 @@ router.get('/admin/revenue', authenticate, requireAdmin, async (req, res) => {
       },
       byType
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET all contributions (admin only)
+router.get('/admin/all', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const contributions = await Contribution.find({ status: 'completed' })
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .exec();
+    res.status(200).json(contributions);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

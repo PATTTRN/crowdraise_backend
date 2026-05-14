@@ -105,7 +105,7 @@ ContributionSchema.statics.confirmAndUpdateCounters = async function (contributi
       contribution.collection,
       {
         $inc: {
-          raised: contribution.netAmount, // Track net amount (after platform fee)
+          raised: contribution.amount, // Track gross amount for public display
           supporters: 1
         }
       },

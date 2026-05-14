@@ -19,6 +19,7 @@ const authLimiter = rateLimit({
 var authRouter = require('./routes/auth');
 var collectionsRouter = require('./routes/collections');
 var contributionsRouter = require('./routes/contributions');
+var withdrawalsRouter = require('./routes/withdrawals');
 
 var app = express();
 mongoose.Promise = global.Promise;
@@ -65,6 +66,7 @@ app.use((req, res, next) => {
 app.use('/auth', authLimiter, authRouter);
 app.use('/collections', collectionsRouter);
 app.use('/contributions', contributionsRouter);
+app.use('/withdrawals', withdrawalsRouter);
 
 // catch 404 and forward to error handler
 app.use(function (req, res, next) {

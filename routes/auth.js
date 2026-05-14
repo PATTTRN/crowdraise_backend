@@ -46,7 +46,33 @@ router.get('/user/:userId', authenticate, async (req, res, next) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-})
+});
+
+// PATCH update user role - Admin only
+router.patch('/user/:userId/role', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const { role } = req.body;
+    if (!['user', 'admin'].includes(role)) {
+      return res.status(400).json({ message: 'Invalid role' });
+    }
+    const user = await User.findByIdAndUpdate(req.params.userId, { role }, { new: true }).select('-password');
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    res.json({ message: 'User role updated', data: user });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE user - Admin only
+router.delete('/user/:userId', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const user = await User.findByIdAndDelete(req.params.userId);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    res.json({ message: 'User deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // POST create user
 router.post('/register', async (req, res, next) => {
@@ -67,15 +93,45 @@ router.post('/register', async (req, res, next) => {
     });
 
     const result = await user.save();
+
+    // Automatically send verification OTP
+    const otp = generateOtp();
+    user.emailOtp = {
+      code: await bcrypt.hash(otp, 10),
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+      attempts: 0
+    };
+    await user.save();
+
+    try {
+      await sendEmailOtp(user.email, otp);
+    } catch (e) {
+      console.warn('Initial OTP send failed, user can request again later', e);
+    }
+
+    const token = jwt.sign(
+      {
+        email: user.email,
+        userId: user._id,
+        role: user.role
+      },
+      process.env.JWT_KEY,
+      {
+        expiresIn: '72h'
+      }
+    );
+
     res.status(201).json({
-      message: 'User created successfully',
+      message: 'User created successfully. Please verify your email.',
+      token,
       user: {
         _id: result._id,
         name: result.name,
         email: result.email,
         role: result.role,
         emailVerified: result.emailVerified
-      }
+      },
+      devOtp: process.env.NODE_ENV !== 'production' ? otp : undefined
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
