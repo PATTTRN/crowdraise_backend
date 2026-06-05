@@ -8,7 +8,7 @@ const { Resend } = require('resend');
  * @param {string} otp     - The OTP string to send.
  * @throws {Error} If the email fails to send.
  */
-async function sendEmailOtp(toEmail, otp) {
+async function sendEmailOtp(toEmail: string, otp: string) {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) {
     if (process.env.NODE_ENV !== 'production') {

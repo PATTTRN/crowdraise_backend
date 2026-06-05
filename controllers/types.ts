@@ -8,6 +8,7 @@ export interface AuthenticatedRequest extends Request {
     email?: string;
     emailVerified?: boolean;
   };
+  collection?: any;
 }
 
 export type CollectionQuery = {

@@ -1,18 +1,24 @@
 const https = require('https');
+const http = require('http');
 
 // ─── Helper: make an HTTPS request ──────────────────────────────────────────
-function paystackRequest(options, body = null) {
+function paystackRequest(
+  options: import('http').RequestOptions,
+  body?: string | null
+): Promise<any> {
   return new Promise((resolve, reject) => {
-    const req = https.request(options, (res) => {
+    const req = https.request(options, (res: import('http').IncomingMessage) => {
       let data = '';
-      res.on('data', (chunk) => (data += chunk));
+      res.on('data', (chunk: Buffer) => (data += chunk));
       res.on('end', () => {
         try {
           const json = JSON.parse(data);
-          if (res.statusCode >= 200 && res.statusCode < 300) {
+          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
             resolve(json);
           } else {
-            reject(new Error(`Paystack error [${res.statusCode}]: ${json.message || data}`));
+            reject(
+              new Error(`Paystack error [${res.statusCode}]: ${json.message || data}`)
+            );
           }
         } catch (e) {
           reject(e);
@@ -25,7 +31,9 @@ function paystackRequest(options, body = null) {
   });
 }
 
-function authHeaders(extra = {}) {
+function authHeaders(
+  extra: Record<string, string> = {}
+): Record<string, string> {
   return {
     Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
     ...extra,
@@ -33,7 +41,9 @@ function authHeaders(extra = {}) {
 }
 
 // ─── Transaction: Initialize ─────────────────────────────────────────────────
-const initializePaystackTransaction = (data) => {
+const initializePaystackTransaction = (
+  data: Record<string, any>
+): Promise<any> => {
   const params = JSON.stringify(data);
   return paystackRequest(
     {
@@ -48,7 +58,7 @@ const initializePaystackTransaction = (data) => {
 };
 
 // ─── Transaction: Verify ─────────────────────────────────────────────────────
-const verifyPaystackTransaction = (reference) => {
+const verifyPaystackTransaction = (reference: string): Promise<any> => {
   return paystackRequest({
     hostname: 'api.paystack.co',
     port: 443,
@@ -59,7 +69,7 @@ const verifyPaystackTransaction = (reference) => {
 };
 
 // ─── Banks: List Nigerian banks ───────────────────────────────────────────────
-const listBanks = () => {
+const listBanks = (): Promise<any> => {
   return paystackRequest({
     hostname: 'api.paystack.co',
     port: 443,
@@ -70,18 +80,27 @@ const listBanks = () => {
 };
 
 // ─── Account: Resolve (verify account number) ────────────────────────────────
-const resolveAccountNumber = (accountNumber, bankCode) => {
+const resolveAccountNumber = (
+  accountNumber: string,
+  bankCode: string
+): Promise<any> => {
   return paystackRequest({
     hostname: 'api.paystack.co',
     port: 443,
-    path: `/bank/resolve?account_number=${encodeURIComponent(accountNumber)}&bank_code=${encodeURIComponent(bankCode)}`,
+    path: `/bank/resolve?account_number=${encodeURIComponent(
+      accountNumber
+    )}&bank_code=${encodeURIComponent(bankCode)}`,
     method: 'GET',
     headers: authHeaders(),
   });
 };
 
 // ─── Transfer: Create recipient ───────────────────────────────────────────────
-const createTransferRecipient = (accountName, accountNumber, bankCode) => {
+const createTransferRecipient = (
+  accountName: string,
+  accountNumber: string,
+  bankCode: string
+): Promise<any> => {
   const params = JSON.stringify({
     type: 'nuban',
     name: accountName,
@@ -103,7 +122,12 @@ const createTransferRecipient = (accountName, accountNumber, bankCode) => {
 
 // ─── Transfer: Initiate ───────────────────────────────────────────────────────
 // amount should be in NGN (naira) — this function converts to kobo
-const initiateTransfer = (amountNaira, recipientCode, reason, reference) => {
+const initiateTransfer = (
+  amountNaira: number,
+  recipientCode: string,
+  reason: string,
+  reference: string
+): Promise<any> => {
   const params = JSON.stringify({
     source: 'balance',
     amount: Math.round(amountNaira * 100), // convert to kobo

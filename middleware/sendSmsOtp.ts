@@ -7,7 +7,7 @@ var twilio = require('twilio');
  * @param {string} otp - The OTP string to send.
  * @throws {Error} If the provider is not configured or the SMS request fails.
  */
-async function sendSmsOtp(phoneNumber, otp) {
+async function sendSmsOtp(phoneNumber: string, otp: string) {
   const provider = (process.env.SMS_PROVIDER || '').toLowerCase();
   const message = `Your Crowdraise verification code is ${otp}. It expires in 10 minutes.`;
 

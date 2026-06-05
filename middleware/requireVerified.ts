@@ -2,7 +2,11 @@
  * Middleware to require email verification.
  * Must be used AFTER the authenticate middleware.
  */
-function requireVerified(req, res, next) {
+import type { Response, NextFunction } from 'express';
+import type { AuthenticatedRequest } from '../controllers/types';
+
+
+function requireVerified(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   // We need to check the DB to ensure we have the latest status, 
   // or trust the token if we include verified status in it.
   // Since we want real-time enforcement, let's assume the authenticate middleware 
