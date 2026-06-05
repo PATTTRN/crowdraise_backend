@@ -1,3 +1,5 @@
+import type {Request, Response, NextFunction} from "express";
+
 var createError = require('http-errors');
 var express = require('express');
 var mongoose = require('mongoose');
@@ -36,7 +38,7 @@ mongoose.connect(mongoUri, {
   .then(() => {
     console.log('MongoDB connected');
   })
-  .catch((err) => {
+  .catch((err: any) => {
     console.error('MongoDB connection error:', err.message);
   });
 
@@ -52,7 +54,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
-app.use((req, res, next) => {
+app.use((req: Request, res: Response, next: NextFunction) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
   if (req.method === 'OPTIONS') {
@@ -69,12 +71,12 @@ app.use('/contributions', contributionsRouter);
 app.use('/withdrawals', withdrawalsRouter);
 
 // catch 404 and forward to error handler
-app.use(function (req, res, next) {
+app.use(function (req: Request, res: Response, next: NextFunction) {
   next(createError(404));
 });
 
 // error handler
-app.use(function (err, req, res, next) {
+app.use(function (err: any, req: Request, res: Response, next: NextFunction) {
   // set locals, only providing error in development
   res.locals.message = err.message;
   res.locals.error = req.app.get('env') === 'development' ? err : {};
