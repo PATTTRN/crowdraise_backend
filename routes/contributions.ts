@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const authenticate = require('../middleware/authenticate');
 const requireAdmin = require('../middleware/requireAdmin');
-import { initializeContribution, confirmContribution, getCollectionContributions, getPlatformRevenueSummary, getAllContributions } from '../controllers/contributions';
+const { initializeContribution, confirmContribution, getCollectionContributions, getPlatformRevenueSummary, getAllContributions } = require('../controllers/contributions');
 
 // POST initialize contribution record
 router.post('/', initializeContribution);

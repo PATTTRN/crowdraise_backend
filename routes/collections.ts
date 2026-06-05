@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-import { authenticate } from '../middleware/authenticate';
-import { requireOwnershipOrAdmin } from '../middleware/requireOwnershipOrAdmin';
+const authenticate = require('../middleware/authenticate');
+const requireOwnershipOrAdmin = require('../middleware/requireOwnershipOrAdmin');
 
 const { getAllCollections, getCollectionById, createCollection, updateCollection, deleteCollection } = require('../controllers/collections');
 

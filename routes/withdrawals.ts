@@ -1,11 +1,8 @@
 const express = require('express');
 const router = express.Router();
-const mongoose = require('mongoose');
-const Withdrawal = require('../models/withdrawal');
-const User = require('../models/user');
 const authenticate = require('../middleware/authenticate');
 const requireAdmin = require('../middleware/requireAdmin');
-import { getBanks, verifyAccount, saveBankDetails, getCreatorBalance, submitWithdrawalRequest, getCreatorWithdrawalHistory, getAllWithdrawals, approveWithdrawal, rejectWithdrawal, markWithdrawalComplete } from "../controllers/withdrawals"
+const { getBanks, verifyAccount, saveBankDetails, getCreatorBalance, submitWithdrawalRequest, getCreatorWithdrawalHistory, getAllWithdrawals, approveWithdrawal, rejectWithdrawal, markWithdrawalComplete } = require("../controllers/withdrawals")
 
 // ─── GET /withdrawals/banks — List Nigerian banks (public) ───────────────────
 router.get('/banks', getBanks);
