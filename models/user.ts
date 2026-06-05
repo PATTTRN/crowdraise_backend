@@ -1,5 +1,7 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcrypt');
+import type {NextFunction} from 'express';
+import type {IUser} from '../controllers/types'
 
 const UserSchema = new mongoose.Schema(
   {
@@ -68,19 +70,27 @@ const UserSchema = new mongoose.Schema(
   }
 );
 
-UserSchema.pre('save', async function () {
-  if (!this.isModified('password')) return;
+UserSchema.pre('save', async function (this: IUser,next: NextFunction) {
+  if (!this.isModified('password')) return next();
   this.password = await bcrypt.hash(this.password, 12);
-  this.passwordChangedAt = Date.now() - 1000;
+  this.passwordChangedAt = new Date(Date.now() - 1000);
+  next();
 });
 
-UserSchema.methods.comparePassword = async function (candidate) {
+UserSchema.methods.comparePassword = async function (
+  this: IUser,
+  candidate: string
+): Promise<boolean> {
   return bcrypt.compare(candidate, this.password);
 };
 
-UserSchema.methods.changedPasswordAfter = function (jwtIssuedAt) {
+UserSchema.methods.changedPasswordAfter = function (
+  this: IUser,
+  jwtIssuedAt: number
+): boolean {
   if (this.passwordChangedAt) {
-    return parseInt(this.passwordChangedAt.getTime() / 1000, 10) > jwtIssuedAt;
+    // passwordChangedAt is a Date, getTime() returns ms since epoch.
+    return Math.floor(this.passwordChangedAt.getTime() / 1000) > jwtIssuedAt;
   }
   return false;
 };

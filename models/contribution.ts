@@ -83,7 +83,7 @@ ContributionSchema.index({ supporter: 1, status: 1 });
 ContributionSchema.index({ collectionCreator: 1, status: 1 });
 ContributionSchema.index({ status: 1, createdAt: -1 });
 
-ContributionSchema.statics.confirmAndUpdateCounters = async function (contributionId) {
+ContributionSchema.statics.confirmAndUpdateCounters = async function (contributionId: string) {
   const session = await mongoose.startSession();
   session.startTransaction();
 

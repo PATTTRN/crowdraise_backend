@@ -1,6 +1,8 @@
+import type {IFundUsage, IImage} from "../controllers/types"
 const mongoose = require('mongoose');
+const { Schema, Types } = mongoose;
 
-const ImageSchema = new mongoose.Schema(
+const ImageSchema = new Schema(
   {
     url: { type: String, required: true },
     publicId: { type: String, required: true },
@@ -9,7 +11,7 @@ const ImageSchema = new mongoose.Schema(
   { _id: true }
 );
 
-const FundUsageSchema = new mongoose.Schema(
+const FundUsageSchema = new Schema(
   {
     description: { type: String, required: true },
     amount: { type: Number, required: true, min: 0 }
@@ -17,7 +19,8 @@ const FundUsageSchema = new mongoose.Schema(
   { _id: false }
 );
 
-const CollectionSchema = new mongoose.Schema(
+// Remove type argument for compatibility with JS imports and runtime
+const CollectionSchema = new Schema(
   {
     type: {
       type: String,
@@ -55,7 +58,7 @@ const CollectionSchema = new mongoose.Schema(
     },
     images: [ImageSchema],
     creator: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: Schema.Types.ObjectId,
       ref: 'User',
       required: true
     },
@@ -78,9 +81,9 @@ const CollectionSchema = new mongoose.Schema(
     deadline: {
       type: Date,
       validate: {
-        validator: function (v) {
+        validator: function (this: any, v: Date) {
           if (this.type === 'tips') return true;
-          return !!v && v > Date.now();
+          return !!v && v.getTime() > Date.now();
         },
         message: 'Deadline must be in the future'
       }
@@ -93,7 +96,7 @@ const CollectionSchema = new mongoose.Schema(
     fundUsage: {
       type: [FundUsageSchema],
       validate: {
-        validator: function (arr) {
+        validator: function (this: any, arr: IFundUsage[]) {
           if (this.type !== 'fundraiser') return true;
           return Array.isArray(arr) && arr.length > 0;
         },
@@ -103,7 +106,7 @@ const CollectionSchema = new mongoose.Schema(
     eventDate: {
       type: Date,
       validate: {
-        validator: function (v) {
+        validator: function (this: any, v: Date) {
           if (this.type !== 'occasion') return true;
           return !!v;
         },
@@ -118,7 +121,7 @@ const CollectionSchema = new mongoose.Schema(
     suggestedAmounts: {
       type: [Number],
       validate: {
-        validator: (arr) => !arr || arr.every((n) => n > 0),
+        validator: (arr: number[] | undefined) => !arr || arr.every((n: number) => n > 0),
         message: 'All suggested amounts must be positive'
       }
     },
@@ -131,22 +134,24 @@ const CollectionSchema = new mongoose.Schema(
   }
 );
 
-CollectionSchema.virtual('progressPercent').get(function () {
+// Virtuals
+CollectionSchema.virtual('progressPercent').get(function (this: any) {
   if (!this.goal || this.goal === 0) return null;
   return Math.min(Math.round((this.raised / this.goal) * 100), 100);
 });
 
-CollectionSchema.virtual('daysLeft').get(function () {
+CollectionSchema.virtual('daysLeft').get(function (this: any) {
   if (!this.deadline) return null;
-  const ms = this.deadline - Date.now();
+  const ms = this.deadline.getTime() - Date.now();
   return ms <= 0 ? 0 : Math.ceil(ms / (1000 * 60 * 60 * 24));
 });
 
-CollectionSchema.virtual('primaryImage').get(function () {
+CollectionSchema.virtual('primaryImage').get(function (this: any) {
   if (!this.images || this.images.length === 0) return null;
-  return this.images.find((img) => img.isPrimary) || this.images[0];
+  return this.images.find((img: IImage) => img.isPrimary) || this.images[0];
 });
 
+// Indexes
 CollectionSchema.index({ status: 1, type: 1 });
 CollectionSchema.index({ creator: 1, status: 1 });
 CollectionSchema.index({ category: 1, status: 1 });
@@ -159,7 +164,7 @@ CollectionSchema.index(
   { name: 'collection_search' }
 );
 
-CollectionSchema.pre('save', function () {
+CollectionSchema.pre('save', function (this: any) {
   if (this.goal && this.raised >= this.goal && this.status === 'active') {
     this.status = 'completed';
   }
