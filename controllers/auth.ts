@@ -1,310 +1,176 @@
-const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
-const { generateOtp } = require('../middleware/generateOtp');
-const { sendEmailOtp } = require('../middleware/sendEmailOtp');
-const User = require('../models/user');
-import type { Request, Response, NextFunction } from 'express';
-import type { AuthenticatedRequest } from './types';
+import { Response } from 'express';
+import bcrypt from 'bcrypt';
+import crypto from 'crypto';
+import { User } from '../models';
+import { AuthRequest } from '../middleware/authenticate';
+import { asyncHandler } from '../src/utils/asyncHandler';
+import { AppError, NotFoundError } from '../src/utils/errors';
+import config from '../src/config';
+import { signToken, generateOtp, hashOtp, generateResetToken, hashToken } from '../src/services/authService';
+import { sendOtpEmail, sendPasswordResetEmail } from '../src/services/emailService';
 
-const getAllUsers = async (req: Request, res: Response, next: NextFunction) => {
-  User.find().select('-password')
-  .exec()
-  .then((users: typeof User[]) => {
-    res.status(200).json({
-      message: 'Users fetched',
-      count: users.length,
-      data: users
-    })
-  })
-  .catch((err: Error) => {
-    res.status(500).json({error: err})
-  })
-}
+export const registerUser = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const existing = await User.findOne({ email: req.body.email });
+  if (existing) throw new AppError(409, 'DUPLICATE_EMAIL', 'User with this email already exists');
 
-const getUserDetails = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
-  const id = req.params.userId;
+  const user = await User.create({
+    name: req.body.name,
+    email: req.body.email,
+    password: req.body.password,
+    role: req.body.role || 'user',
+    location: req.body.country,
+  });
 
-  // Allow if requesting own info, or if admin
-  if (
-    !req.user || // Defensive
-    (req.user.userId !== id && req.user.role !== 'admin')
-  ) {
-    return res.status(403).json({ message: 'Forbidden. You can only access your own details.' });
+  const otp = generateOtp();
+  user.emailOtp = { code: await hashOtp(otp), expiresAt: new Date(Date.now() + config.otpExpiryMs), attempts: 0 };
+  await user.save();
+
+  sendOtpEmail(user.email, otp).catch((e) => console.warn('[Auth] Initial OTP failed:', e.message));
+  const token = signToken(user);
+
+  res.status(201).json({
+    message: 'User created. Please verify your email.',
+    data: { token, user: { _id: user._id, name: user.name, email: user.email, role: user.role, emailVerified: user.emailVerified } },
+    devOtp: config.nodeEnv !== 'production' ? otp : undefined,
+  });
+});
+
+export const loginUser = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const user = await User.findOne({ email: req.body.email }).select('+password');
+  if (!user || !(await user.comparePassword(req.body.password))) {
+    throw new AppError(401, 'INVALID_CREDENTIALS', 'Invalid login details');
   }
+
+  const token = signToken(user);
+  res.status(200).json({
+    message: 'Login successful',
+    data: { token, user: { _id: user._id, name: user.name, email: user.email, role: user.role, emailVerified: user.emailVerified } },
+  });
+});
+
+export const getAllUsers = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const users = await User.find().select('-password').lean();
+  res.status(200).json({ message: 'Users fetched', count: users.length, data: users });
+});
+
+export const getUserDetails = asyncHandler(async (req: AuthRequest, res: Response) => {
+  if (req.user?.userId !== req.params.userId && req.user?.role !== 'admin') {
+    throw new AppError(403, 'FORBIDDEN', 'You can only access your own details');
+  }
+  const user = await User.findById(req.params.userId).select('-password -emailOtp');
+  if (!user) throw new NotFoundError('User');
+  res.status(200).json({ user });
+});
+
+export const updateRole = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { role } = req.body;
+  if (!['user', 'admin'].includes(role)) throw new AppError(400, 'INVALID_ROLE', 'Invalid role');
+  const user = await User.findByIdAndUpdate(req.params.userId, { role }, { new: true }).select('-password');
+  if (!user) throw new NotFoundError('User');
+  res.json({ message: 'Role updated', data: user });
+});
+
+export const deleteUser = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const user = await User.findByIdAndDelete(req.params.userId);
+  if (!user) throw new NotFoundError('User');
+  res.json({ message: 'User deleted' });
+});
+
+export const sendEmailOtp = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const user = await User.findById(req.user!.userId);
+  if (!user) throw new NotFoundError('User');
+  if (user.emailVerified) throw new AppError(400, 'ALREADY_VERIFIED', 'Email is already verified');
+  if (user.emailOtp?.expiresAt && (Date.now() - (user.emailOtp.expiresAt.getTime() - config.otpExpiryMs)) / 1000 < 60) {
+    throw new AppError(429, 'RATE_LIMITED', 'Wait 60 seconds before requesting another code');
+  }
+
+  const otp = generateOtp();
+  user.emailOtp = { code: await hashOtp(otp), expiresAt: new Date(Date.now() + config.otpExpiryMs), attempts: 0 };
+  await user.save();
 
   try {
-    const user = await User.findById(id).select('-password -emailOtp').exec();
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
+    await sendOtpEmail(user.email, otp);
+    res.status(200).json({ message: 'Verification code sent' });
+  } catch {
+    if (config.nodeEnv !== 'production') {
+      res.status(200).json({ message: 'OTP generated (email unavailable)', devOtp: otp });
+    } else {
+      throw new AppError(500, 'EMAIL_FAILED', 'Failed to send email');
     }
-    res.status(200).json({ user });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
   }
-};
+});
 
-const updateRole = async (req: Request, res: Response) => {
-  try {
-    const { role } = req.body;
-    if (!['user', 'admin'].includes(role)) {
-      return res.status(400).json({ message: 'Invalid role' });
-    }
-    const user = await User.findByIdAndUpdate(req.params.userId, { role }, { new: true }).select('-password');
-    if (!user) return res.status(404).json({ message: 'User not found' });
-    res.json({ message: 'User role updated', data: user });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message || 'Internal server error' });
+export const verifyEmailOtp = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { otp } = req.body;
+  if (!otp) throw new AppError(400, 'MISSING_OTP', 'OTP is required');
+
+  const user = await User.findById(req.user!.userId);
+  if (!user) throw new NotFoundError('User');
+  if (user.emailVerified) throw new AppError(400, 'ALREADY_VERIFIED', 'Email already verified');
+  if (!user.emailOtp?.code || !user.emailOtp.expiresAt) throw new AppError(400, 'NO_OTP', 'No OTP request found');
+  if (user.emailOtp.expiresAt < new Date()) throw new AppError(400, 'OTP_EXPIRED', 'OTP has expired');
+  if (user.emailOtp.attempts >= 3) throw new AppError(400, 'TOO_MANY_ATTEMPTS', 'Too many attempts');
+
+  user.emailOtp.attempts += 1;
+  await user.save();
+
+  if (!(await bcrypt.compare(String(otp), user.emailOtp.code))) {
+    throw new AppError(400, 'INVALID_OTP', 'Invalid OTP');
   }
-};
 
-const deleteUser = async (req: Request, res: Response) => {
-  try {
-    const user = await User.findByIdAndDelete(req.params.userId);
-    if (!user) return res.status(404).json({ message: 'User not found' });
-    res.json({ message: 'User deleted successfully' });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+  user.emailVerified = true;
+  user.emailOtp = undefined;
+  await user.save();
+
+  res.status(200).json({
+    message: 'Email verified',
+    user: { _id: user._id, name: user.name, email: user.email, role: user.role, emailVerified: user.emailVerified },
+  });
+});
+
+export const forgotPassword = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { email } = req.body;
+  const user = await User.findOne({ email });
+  if (!user) {
+    res.status(200).json({ message: 'If that email exists, a reset link has been sent.' });
+    return;
   }
-};
 
-const registerUser = async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const existingUser = await User.findOne({ email: req.body.email }).exec();
-    if (existingUser) {
-      return res.status(409).json({
-        message: 'User with this email already exists'
-      });
-    }
+  const resetToken = generateResetToken();
+  user.passwordResetToken = await hashToken(resetToken);
+  user.passwordResetExpires = new Date(Date.now() + 3600000);
+  await user.save();
 
-    const user = new User({
-      name: req.body.name,
-      email: req.body.email,
-      password: req.body.password,
-      role: req.body.role || 'user',
-      location: req.body.country
-    });
+  const resetUrl = `${config.frontendUrl}/auth/reset-password?token=${resetToken}&email=${encodeURIComponent(email)}`;
+  sendPasswordResetEmail(email, resetUrl).catch((e) => console.warn('[Auth] Reset email failed:', e.message));
 
-    const result = await user.save();
-
-    // Automatically send verification OTP
-    const otp = generateOtp();
-    user.emailOtp = {
-      code: await bcrypt.hash(otp, 10),
-      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
-      attempts: 0
-    };
-    await user.save();
-
-    try {
-      await sendEmailOtp(user.email, otp);
-    } catch (e) {
-      console.warn('Initial OTP send failed, user can request again later', e);
-    }
-
-    const token = jwt.sign(
-      {
-        email: user.email,
-        userId: user._id,
-        role: user.role,
-        emailVerified: user.emailVerified
-      },
-      process.env.JWT_KEY,
-      {
-        expiresIn: '72h'
-      }
-    );
-
-    res.status(201).json({
-      message: 'User created successfully. Please verify your email.',
-      token,
-      user: {
-        _id: result._id,
-        name: result.name,
-        email: result.email,
-        role: result.role,
-        emailVerified: result.emailVerified
-      },
-      devOtp: process.env.NODE_ENV !== 'production' ? otp : undefined
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+  if (config.nodeEnv !== 'production') {
+    res.status(200).json({ message: 'Reset link sent', devToken: resetToken });
+  } else {
+    res.status(200).json({ message: 'If that email exists, a reset link has been sent.' });
   }
-};
+});
 
-const loginUser = async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const user = await User.findOne({ email: req.body.email }).select('+password').exec();
-    if (!user) {
-      return res.status(401).json({
-        message: 'Invalid login details'
-      });
-    }
-
-    const isValidPassword = await user.comparePassword(req.body.password);
-    if (!isValidPassword) {
-      return res.status(401).json({
-        message: 'Invalid login details'
-      });
-    }
-
-    const token = jwt.sign(
-      {
-        email: user.email,
-        userId: user._id,
-        role: user.role,
-        emailVerified: user.emailVerified
-      },
-      process.env.JWT_KEY,
-      {
-        expiresIn: '72h'
-      }
-    );
-
-    res.status(200).json({
-      message: 'Login successful',
-      token,
-      user: {
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        emailVerified: user.emailVerified
-      }
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+export const resetPassword = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { email, token, newPassword } = req.body;
+  const user = await User.findOne({ email }).select('+password');
+  if (!user || !user.passwordResetToken || !user.passwordResetExpires) {
+    throw new AppError(400, 'INVALID_RESET', 'Invalid or expired reset token');
   }
-};
+  if (user.passwordResetExpires < new Date()) throw new AppError(400, 'TOKEN_EXPIRED', 'Reset token has expired');
+  if (!(await bcrypt.compare(token, user.passwordResetToken))) throw new AppError(400, 'INVALID_TOKEN', 'Invalid reset token');
 
-const sendEmail = async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    if (!req.user || !req.user.userId) {
-      return res.status(401).json({ message: 'Not authenticated' });
-    }
-    const user = await User.findById(req.user.userId).exec();
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
+  user.password = newPassword;
+  user.passwordResetToken = undefined;
+  user.passwordResetExpires = undefined;
+  await user.save();
 
-    if (user.emailVerified) {
-      return res.status(400).json({ message: 'Email is already verified.' });
-    }
+  res.status(200).json({ message: 'Password reset successful' });
+});
 
-    // Rate-limit: one OTP per 60 seconds
-    if (user.emailOtp?.expiresAt) {
-      const secondsOld = (Date.now() - (user.emailOtp.expiresAt.getTime() - 10 * 60 * 1000)) / 1000;
-      if (secondsOld < 60) {
-        return res.status(429).json({ message: 'Please wait 60 seconds before requesting another code.' });
-      }
-    }
-
-    const otp = generateOtp();
-    user.emailOtp = {
-      code: await bcrypt.hash(otp, 10),
-      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
-      attempts: 0
-    };
-    await user.save();
-
-    try {
-      await sendEmailOtp(user.email, otp);
-    } catch (providerError: unknown) {
-      let errorMsg = '[email/send-otp] Email provider error: ';
-      if (
-        typeof providerError === 'object' &&
-        providerError !== null &&
-        'message' in providerError
-      ) {
-        errorMsg += (providerError as any).message;
-      } else {
-        errorMsg += String(providerError);
-      }
-      console.error(errorMsg);
-      if (process.env.NODE_ENV !== 'production') {
-        return res.status(200).json({
-          message: 'OTP generated. Email provider unavailable, using dev fallback.',
-          devOtp: otp
-        });
-      }
-      throw providerError;
-    }
-
-    res.status(200).json({ message: 'Verification code sent to your email.' });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-};
-
-const verifyEmailOtp = async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const { otp } = req.body;
-    if (!otp) {
-      return res.status(400).json({ message: 'otp is required.' });
-    }
-
-    if (!req.user || !req.user.userId) {
-      return res.status(401).json({ message: 'Not authenticated' });
-    }
-
-    const user = await User.findById(req.user.userId).exec();
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    if (user.emailVerified) {
-      return res.status(400).json({ message: 'Email is already verified.' });
-    }
-
-    if (!user.emailOtp?.code || !user.emailOtp?.expiresAt) {
-      return res.status(400).json({ message: 'No OTP request found. Please request a new code.' });
-    }
-
-    if (user.emailOtp.expiresAt < new Date()) {
-      user.emailOtp = undefined;
-      await user.save();
-      return res.status(400).json({ message: 'OTP has expired. Please request a new code.' });
-    }
-
-    if (user.emailOtp.attempts >= 3) {
-      user.emailOtp = undefined;
-      await user.save();
-      return res.status(400).json({ message: 'Too many attempts. Please request a new code.' });
-    }
-
-    user.emailOtp.attempts += 1;
-    await user.save();
-
-    const isValidOtp = await bcrypt.compare(String(otp), user.emailOtp.code);
-    if (!isValidOtp) {
-      return res.status(400).json({ message: 'Invalid OTP.' });
-    }
-
-    user.emailVerified = true;
-    user.emailOtp = undefined;
-    await user.save();
-
-    res.status(200).json({
-      message: 'Email verified successfully.',
-      user: {
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        emailVerified: user.emailVerified
-      }
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-};
-
-module.exports = {
-  getAllUsers,
-  getUserDetails,
-  updateRole,
-  deleteUser,
-  registerUser,
-  loginUser,
-  sendEmail,
-  verifyEmailOtp
-};
+export const refreshToken = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const user = await User.findById(req.user!.userId);
+  if (!user) throw new NotFoundError('User');
+  const token = signToken(user);
+  res.status(200).json({ message: 'Token refreshed', data: { token } });
+});

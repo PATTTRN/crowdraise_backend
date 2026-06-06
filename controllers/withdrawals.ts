@@ -1,273 +1,108 @@
-import type { Request, Response } from 'express'
-const Contribution = require('../models/contribution');
-const Withdrawal = require('../models/withdrawal');
-const User = require('../models/withdrawals');
-import mongoose = require('mongoose');
-import type { AuthenticatedRequest } from './types';
-const {
-    listBanks,
-    resolveAccountNumber,
-    createTransferRecipient,
-    initiateTransfer,
-} = require('../middleware/paystack');
+import { Request, Response } from 'express';
+import mongoose from 'mongoose';
+import { User, Withdrawal } from '../models';
+import { AuthRequest } from '../middleware/authenticate';
+import { asyncHandler } from '../src/utils/asyncHandler';
+import { NotFoundError, AppError } from '../src/utils/errors';
+import { getBalance } from '../src/services/balanceService';
+import { listBanks, resolveAccount, createRecipient, initiateTransfer } from '../src/services/paymentService';
+import { sendWithdrawalStatus } from '../src/services/emailService';
+import { createNotification } from '../src/services/notificationService';
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+export const getBanks = asyncHandler(async (req: Request, res: Response) => {
+  const result = await listBanks();
+  res.status(200).json({ message: 'Banks fetched', data: result.data || [] });
+});
 
-// Calculate a creator's withdrawable balance (earnings minus locked withdrawals)
-async function getCreatorBalanceHelper(userId: string) {
-    const creatorId = new mongoose.Types.ObjectId(userId);
+export const verifyAccount = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { accountNumber, bankCode } = req.body;
+  const result = await resolveAccount(accountNumber, bankCode);
+  if (!result.status || !result.data) throw new AppError(400, 'VERIFY_FAILED', 'Could not verify account');
+  res.status(200).json({ message: 'Account verified', data: { accountName: result.data.account_name } });
+});
 
-    const [earningsResult] = await Contribution.aggregate([
-        { $match: { collectionCreator: creatorId, status: 'completed' } },
-        {
-            $group: {
-                _id: null,
-                totalGross: { $sum: '$amount' },
-                totalFees: { $sum: '$platformFee' },
-                totalEarned: { $sum: '$netAmount' }
-            }
-        },
-    ]);
+export const saveBankDetails = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const user = await User.findByIdAndUpdate(req.user!.userId, { $set: { bankDetails: req.body } }, { new: true });
+  if (!user) throw new NotFoundError('User');
+  res.status(200).json({ message: 'Bank details saved', data: user.bankDetails });
+});
 
-    const totalGross = parseFloat((earningsResult?.totalGross ?? 0).toFixed(2));
-    const totalFees = parseFloat((earningsResult?.totalFees ?? 0).toFixed(2));
-    const totalEarned = parseFloat((earningsResult?.totalEarned ?? 0).toFixed(2));
+export const getCreatorBalance = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const balance = await getBalance(req.user!.userId);
+  res.status(200).json({ message: 'Balance fetched', data: balance });
+});
 
-    // Lock all non-rejected withdrawals so the creator can't double-request
-    const [withdrawnResult] = await Withdrawal.aggregate([
-        {
-            $match: {
-                creator: creatorId,
-                status: { $in: ['pending', 'approved', 'processing', 'completed'] },
-            },
-        },
-        { $group: { _id: null, totalLocked: { $sum: '$amount' } } },
-    ]);
-    const totalLocked = parseFloat((withdrawnResult?.totalLocked ?? 0).toFixed(2));
+export const submitWithdrawalRequest = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const { amount } = req.body;
+  const user = await User.findById(req.user!.userId);
+  if (!user || !user.bankDetails?.accountNumber) throw new AppError(400, 'NO_BANK', 'Save bank details first');
+  if (amount < 1000) throw new AppError(400, 'MIN_AMOUNT', 'Minimum withdrawal is ₦1,000');
 
-    const [paidResult] = await Withdrawal.aggregate([
-        { $match: { creator: creatorId, status: 'completed' } },
-        { $group: { _id: null, totalPaid: { $sum: '$amount' } } },
-    ]);
-    const totalPaid = parseFloat((paidResult?.totalPaid ?? 0).toFixed(2));
+  const balance = await getBalance(req.user!.userId);
+  if (amount > balance.available) throw new AppError(400, 'INSUFFICIENT', `Only ₦${balance.available.toLocaleString()} available`);
 
-    const pendingAmount = parseFloat((totalLocked - totalPaid).toFixed(2));
-    const available = parseFloat(Math.max(0, totalEarned - totalLocked).toFixed(2));
+  const withdrawal = await Withdrawal.create({
+    creator: req.user!.userId,
+    amount,
+    bankDetails: user.bankDetails,
+  });
 
-    return { totalGross, totalFees, totalEarned, totalPaid, pendingAmount, available };
-}
+  res.status(201).json({ message: 'Withdrawal request submitted', data: withdrawal });
+});
 
-const getBanks = async (req: Request, res: Response) => {
-    try {
-        const result = await listBanks();
-        res.json({ data: result.data });
-    } catch (err: any) {
-        res.status(500).json({ error: err.message });
-    }
-}
+export const getCreatorWithdrawalHistory = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const withdrawals = await Withdrawal.find({ creator: req.user!.userId }).sort({ createdAt: -1 }).lean();
+  res.status(200).json({ message: 'Withdrawal history fetched', data: withdrawals });
+});
 
-const verifyAccount = async (req: Request, res: Response) => {
-    try {
-        const { accountNumber, bankCode } = req.body;
-        if (!accountNumber || !bankCode) {
-            return res.status(400).json({ message: 'accountNumber and bankCode are required' });
-        }
-        const result = await resolveAccountNumber(accountNumber, bankCode);
-        res.json({ accountName: result.data.account_name });
-    } catch (err) {
-        res.status(400).json({ error: 'Could not verify account. Check the number and bank.' });
-    }
-}
+export const getAllWithdrawals = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const filter: Record<string, unknown> = {};
+  if (req.query.status) filter.status = req.query.status;
+  const withdrawals = await Withdrawal.find(filter).populate('creator', 'name email').sort({ createdAt: -1 }).lean();
+  res.status(200).json({ message: 'All withdrawals', data: withdrawals });
+});
 
-const saveBankDetails = async (req: AuthenticatedRequest, res: Response) => {
-    try {
-        const { accountNumber, bankCode, accountName, bankName } = req.body;
-        if (!accountNumber || !bankCode || !accountName) {
-            return res.status(400).json({ message: 'accountNumber, bankCode, and accountName are required' });
-        }
-        await User.findByIdAndUpdate(req.user?.userId, {
-            bankDetails: { accountNumber, bankCode, accountName, bankName }
-        });
-        res.json({ message: 'Bank details saved successfully' });
-    } catch (err: any) {
-        res.status(500).json({ error: err.message });
-    }
-}
+export const approveWithdrawal = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const withdrawal = await Withdrawal.findById(req.params.id).populate('creator');
+  if (!withdrawal) throw new NotFoundError('Withdrawal');
+  if (withdrawal.status !== 'pending') throw new AppError(400, 'NOT_PENDING', 'Withdrawal is not pending');
 
-const getCreatorBalance = async (req: AuthenticatedRequest, res: Response) => {
-    try {
-        if (!req.user || !req.user.userId) {
-            return res.status(401).json({ message: 'Authentication required' });
-        }
+  const creator = await User.findById(withdrawal.creator);
+  if (!creator?.bankDetails) throw new AppError(400, 'NO_BANK', 'Creator has no bank details');
 
-        const balance = await getCreatorBalanceHelper(req.user.userId);
-        res.json(balance);
-    } catch (err: any) {
-        res.status(500).json({ error: err.message });
-    }
-}
+  const recipient = await createRecipient(creator.bankDetails.accountName, creator.bankDetails.accountNumber, creator.bankDetails.bankCode);
+  if (!recipient.data?.recipient_code) throw new AppError(400, 'PAYSTACK_ERROR', 'Failed to create recipient');
 
-const submitWithdrawalRequest = async (req: AuthenticatedRequest, res: Response) => {
-    try {
-        const { amount } = req.body;
-        const requestedAmount = parseFloat(amount);
+  const ref = `WD-${withdrawal._id}-${Date.now()}`;
+  const transfer = await initiateTransfer(withdrawal.amount, recipient.data.recipient_code, 'Withdrawal payout', ref);
 
-        if (isNaN(requestedAmount) || requestedAmount < 1000) {
-            return res.status(400).json({ message: 'Minimum withdrawal amount is ₦1,000' });
-        }
+  withdrawal.status = 'approved';
+  withdrawal.paystackRecipientCode = recipient.data.recipient_code;
+  withdrawal.paystackTransferCode = (transfer as any).data?.transfer_code || '';
+  withdrawal.paystackTransferReference = ref;
+  withdrawal.processedBy = req.user!.userId as any;
+  await withdrawal.save();
 
-        if (!req.user || !req.user.userId) {
-            return res.status(401).json({ message: 'Authentication required' });
-        }
+  if (creator.email && creator.notificationPrefs?.emailOnWithdrawal !== false) {
+    sendWithdrawalStatus(creator.email, creator.name, withdrawal.amount, 'approved').catch(() => {});
+  }
+  await createNotification(withdrawal.creator.toString(), 'withdrawal_approved', `₦${withdrawal.amount.toLocaleString()} withdrawal approved`);
 
-        // Must have bank details saved
-        const user = await User.findById(req.user.userId);
-        if (!user.bankDetails?.accountNumber) {
-            return res.status(400).json({ message: 'Please save your bank details before requesting a withdrawal.' });
-        }
+  res.status(200).json({ message: 'Withdrawal approved', data: withdrawal });
+});
 
-        // Check available balance
-        const { available } = await getCreatorBalanceHelper(req.user.userId);
-        if (requestedAmount > available) {
-            return res.status(400).json({
-                message: `Insufficient balance. You have ₦${available.toLocaleString()} available.`
-            });
-        }
+export const rejectWithdrawal = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const withdrawal = await Withdrawal.findByIdAndUpdate(req.params.id, { $set: { status: 'rejected', adminNote: req.body.adminNote || '', processedBy: req.user!.userId } }, { new: true });
+  if (!withdrawal) throw new NotFoundError('Withdrawal');
+  const creator = await User.findById(withdrawal.creator);
+  if (creator?.email && creator?.notificationPrefs?.emailOnWithdrawal !== false) {
+    sendWithdrawalStatus(creator.email, creator.name, withdrawal.amount, 'rejected').catch(() => {});
+  }
+  res.status(200).json({ message: 'Withdrawal rejected', data: withdrawal });
+});
 
-        const withdrawal = new Withdrawal({
-            creator: req.user.userId,
-            amount: requestedAmount,
-            bankDetails: user.bankDetails
-        });
-
-        await withdrawal.save();
-
-        res.status(201).json({
-            message: 'Withdrawal request submitted. It will be processed within 1-3 business days.',
-            data: withdrawal
-        });
-    } catch (err: any) {
-        res.status(400).json({ error: err.message });
-    }
-}
-
-const getCreatorWithdrawalHistory = async (req: AuthenticatedRequest, res: Response) => {
-    try {
-        if (!req.user || !req.user.userId) {
-            return res.status(401).json({ message: 'Authentication required' });
-        }
-        const withdrawals = await Withdrawal.find({ creator: req.user.userId })
-            .sort({ createdAt: -1 })
-            .exec();
-        res.json({ count: withdrawals.length, data: withdrawals });
-    } catch (err: any) {
-        res.status(500).json({ error: err.message });
-    }
-}
-
-const getAllWithdrawals = async (req: AuthenticatedRequest, res: Response) => {
-    try {
-        const { status } = req.query;
-        const filter = status ? { status } : {};
-        const withdrawals = await Withdrawal.find(filter)
-            .populate('creator', 'name email')
-            .populate('processedBy', 'name email')
-            .sort({ createdAt: -1 })
-            .exec();
-        res.json({ count: withdrawals.length, data: withdrawals });
-    } catch (err: any) {
-        res.status(500).json({ error: err.message });
-    }
-}
-
-const approveWithdrawal = async (req: AuthenticatedRequest, res: Response) => {
-    try {
-        const withdrawal = await Withdrawal.findById(req.params.id);
-        if (!withdrawal) return res.status(404).json({ message: 'Withdrawal not found' });
-
-        if (withdrawal.status !== 'pending') {
-            return res.status(400).json({ message: `Cannot approve a withdrawal with status: ${withdrawal.status}` });
-        }
-
-        const { accountName, accountNumber, bankCode } = withdrawal.bankDetails;
-
-        // 1. Create a Paystack transfer recipient
-        const recipient = await createTransferRecipient(accountName, accountNumber, bankCode);
-        const recipientCode = recipient.data.recipient_code;
-
-        // 2. Generate a unique idempotency reference
-        const reference = `CRW-WD-${withdrawal._id}-${Date.now()}`;
-
-        // 3. Initiate the transfer
-        const transfer = await initiateTransfer(
-            withdrawal.amount,
-            recipientCode,
-            `CrowdRaise withdrawal for ${accountName}`,
-            reference
-        );
-
-        if (!req.user || !req.user.userId) {
-            return res.status(401).json({ message: 'Authentication required' });
-        }
-        withdrawal.status = 'processing';
-        withdrawal.paystackRecipientCode = recipientCode;
-        withdrawal.paystackTransferCode = transfer.data.transfer_code;
-        withdrawal.paystackTransferReference = reference;
-        withdrawal.processedBy = req.user.userId;
-        withdrawal.processedAt = new Date();
-        await withdrawal.save();
-
-        res.json({
-            message: 'Transfer initiated successfully. Paystack will complete it shortly.',
-            data: withdrawal
-        });
-    } catch (err: any) {
-        res.status(500).json({ error: err.message });
-    }
-}
-
-const rejectWithdrawal = async (req: AuthenticatedRequest, res: Response) => {
-    try {
-        const { reason } = req.body;
-        const withdrawal = await Withdrawal.findById(req.params.id);
-        if (!withdrawal) return res.status(404).json({ message: 'Withdrawal not found' });
-
-        if (!['pending', 'approved'].includes(withdrawal.status)) {
-            return res.status(400).json({ message: `Cannot reject a withdrawal with status: ${withdrawal.status}` });
-        }
-
-        if (!req.user || !req.user.userId) {
-            return res.status(401).json({ message: 'Authentication required' });
-        }
-
-        withdrawal.status = 'rejected';
-        withdrawal.adminNote = reason || 'No reason provided';
-        withdrawal.processedBy = req.user.userId;
-        withdrawal.processedAt = new Date();
-        await withdrawal.save();
-
-        res.json({ message: 'Withdrawal rejected', data: withdrawal });
-    } catch (err: any) {
-        res.status(500).json({ error: err.message });
-    }
-}
-
-const markWithdrawalComplete = async (req: AuthenticatedRequest, res: Response) => {
-    try {
-        if (!req.user || !req.user.userId) {
-            return res.status(401).json({ message: 'Authentication required' });
-
-        }
-        const withdrawal = await Withdrawal.findByIdAndUpdate(
-            req.params.id,
-            { status: 'completed', processedBy: req.user.userId, processedAt: new Date() },
-            { new: true }
-        );
-        if (!withdrawal) return res.status(404).json({ message: 'Withdrawal not found' });
-        res.json({ message: 'Withdrawal marked as completed', data: withdrawal });
-    } catch (err: any) {
-        res.status(500).json({ error: err.message });
-    }
-}
-
-module.exports = { getBanks, verifyAccount, saveBankDetails, getCreatorBalance, submitWithdrawalRequest, getCreatorWithdrawalHistory, getAllWithdrawals, approveWithdrawal, rejectWithdrawal, markWithdrawalComplete }
+export const markWithdrawalComplete = asyncHandler(async (req: AuthRequest, res: Response) => {
+  const withdrawal = await Withdrawal.findByIdAndUpdate(req.params.id, { $set: { status: 'completed', processedAt: new Date() } }, { new: true });
+  if (!withdrawal) throw new NotFoundError('Withdrawal');
+  res.status(200).json({ message: 'Withdrawal completed', data: withdrawal });
+});
