@@ -1,5 +1,5 @@
 import type { Response, NextFunction } from 'express';
-import type { AuthenticatedRequest } from '../controllers/types';
+import type { AuthenticatedRequest } from '../lib/types';
 const Collection = require('../models/collection');
 
 const requireOwnershipOrAdmin = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {

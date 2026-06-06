@@ -1,7 +1,7 @@
 const Collection = require('../models/collection');
 import type { Request, Response } from 'express';
 const User = require('../models/user');
-import type { CollectionQuery, AuthenticatedRequest } from './types';
+import type { CollectionQuery, AuthenticatedRequest } from '../lib/types';
 
 const getAllCollections = async (req: Request, res: Response) => {
   try {

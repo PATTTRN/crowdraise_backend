@@ -2,7 +2,7 @@
  * Authentication middleware: requires valid JWT, attaches user info to req.user
  */
 import type { Response, NextFunction } from 'express';
-import type types = require('../controllers/types');
+import type types = require('../lib/types');
 const jwt = require('jsonwebtoken');
 
 function authenticate(req: types.AuthenticatedRequest, res: Response, next: NextFunction) {

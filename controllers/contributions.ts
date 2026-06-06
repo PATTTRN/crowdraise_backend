@@ -113,7 +113,7 @@ const confirmContribution = async (req: Request, res: Response) => {
       if (!paystackResponse.status || paystackResponse.data.status !== 'success') {
         return res.status(400).json({ 
           message: 'Payment verification failed', 
-          details: paystackResponse.message || 'Transaction not successful' 
+          details: paystackResponse.data.gateway_response || 'Transaction not successful' 
         });
       }
   

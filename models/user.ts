@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcrypt');
-import type {IUser} from '../controllers/types'
+import type {IUser} from '../lib/types'
 
 const UserSchema = new mongoose.Schema(
   {

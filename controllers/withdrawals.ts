@@ -3,7 +3,7 @@ const Contribution = require('../models/contribution');
 const Withdrawal = require('../models/withdrawal');
 const User = require('../models/user');
 import mongoose = require('mongoose');
-import type { AuthenticatedRequest } from './types';
+import type { AuthenticatedRequest } from '../lib/types';
 const {
     listBanks,
     resolveAccountNumber,
@@ -258,12 +258,22 @@ const markWithdrawalComplete = async (req: AuthenticatedRequest, res: Response) 
             return res.status(401).json({ message: 'Authentication required' });
 
         }
-        const withdrawal = await Withdrawal.findByIdAndUpdate(
-            req.params.id,
-            { status: 'completed', processedBy: req.user.userId, processedAt: new Date() },
-            { new: true }
-        );
+        const withdrawal = await Withdrawal.findById(req.params.id);
         if (!withdrawal) return res.status(404).json({ message: 'Withdrawal not found' });
+
+        if (withdrawal.status === 'rejected') {
+            return res.status(400).json({ message: 'Cannot mark a rejected withdrawal as completed' });
+        }
+        
+        if (withdrawal.status === 'completed') {
+            return res.status(400).json({ message: 'Withdrawal is already completed' });
+        }
+
+        withdrawal.status = 'completed';
+        withdrawal.processedBy = req.user.userId;
+        withdrawal.processedAt = new Date();
+        await withdrawal.save();
+
         res.json({ message: 'Withdrawal marked as completed', data: withdrawal });
     } catch (err: any) {
         res.status(500).json({ error: err.message });

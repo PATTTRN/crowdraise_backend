@@ -3,7 +3,7 @@
  * Must be used AFTER the authenticate middleware.
  */
 import type { Response, NextFunction } from 'express';
-import type { AuthenticatedRequest } from '../controllers/types';
+import type { AuthenticatedRequest } from '../lib/types';
 
 
 function requireVerified(req: AuthenticatedRequest, res: Response, next: NextFunction) {

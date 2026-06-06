@@ -3,7 +3,7 @@
  * Must be used after the `authenticate` middleware so that req.user is set.
  */
 import type { Response, NextFunction } from 'express';
-import type { AuthenticatedRequest } from '../controllers/types';
+import type { AuthenticatedRequest } from '../lib/types';
 
 function requireAdmin(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   if (!req.user || req.user.role !== 'admin') {

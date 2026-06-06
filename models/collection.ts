@@ -1,4 +1,4 @@
-import type {IFundUsage, IImage} from "../controllers/types"
+import type {IFundUsage, IImage} from "../lib/types"
 const mongoose = require('mongoose');
 const { Schema, Types } = mongoose;
 

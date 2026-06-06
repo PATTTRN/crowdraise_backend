@@ -1,10 +1,10 @@
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const { generateOtp } = require('../middleware/generateOtp');
-const { sendEmailOtp } = require('../middleware/sendEmailOtp');
+const generateOtp = require('../middleware/generateOtp');
+const sendEmailOtp = require('../middleware/sendEmailOtp');
 const User = require('../models/user');
 import type { Request, Response, NextFunction } from 'express';
-import type { AuthenticatedRequest } from './types';
+import type { AuthenticatedRequest } from '../lib/types';
 
 const getAllUsers = async (req: Request, res: Response, next: NextFunction) => {
   User.find().select('-password')
