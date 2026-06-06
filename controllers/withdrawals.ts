@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express'
 const Contribution = require('../models/contribution');
 const Withdrawal = require('../models/withdrawal');
-const User = require('../models/withdrawals');
+const User = require('../models/user');
 import mongoose = require('mongoose');
 import type { AuthenticatedRequest } from './types';
 const {

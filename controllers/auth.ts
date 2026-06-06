@@ -67,7 +67,7 @@ const deleteUser = async (req: Request, res: Response) => {
   }
 };
 
-const registerUser = async (req: Request, res: Response, next: NextFunction) => {
+const registerUser = async (req: Request, res: Response) => {
   try {
     const existingUser = await User.findOne({ email: req.body.email }).exec();
     if (existingUser) {
@@ -305,6 +305,6 @@ module.exports = {
   deleteUser,
   registerUser,
   loginUser,
-  sendEmail,
+  sendEmailOtp: sendEmail,
   verifyEmailOtp
 };

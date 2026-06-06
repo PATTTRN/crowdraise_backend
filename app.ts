@@ -43,14 +43,15 @@ mongoose.connect(mongoUri, {
   });
 
 // view engine setup
-app.set('views', path.join(__dirname, 'views'));
+const rootDir = path.join(__dirname, path.basename(__dirname) === 'dist' ? '..' : '.');
+app.set('views', path.join(rootDir, 'views'));
 app.set('view engine', 'jade');
 
 app.use(logger('dev'));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(rootDir, 'public')));
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 

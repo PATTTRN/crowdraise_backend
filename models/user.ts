@@ -1,6 +1,5 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcrypt');
-import type {NextFunction} from 'express';
 import type {IUser} from '../controllers/types'
 
 const UserSchema = new mongoose.Schema(
@@ -70,11 +69,10 @@ const UserSchema = new mongoose.Schema(
   }
 );
 
-UserSchema.pre('save', async function (this: IUser,next: NextFunction) {
-  if (!this.isModified('password')) return next();
+UserSchema.pre('save', async function (this: IUser) {
+  if (!this.isModified('password')) return;
   this.password = await bcrypt.hash(this.password, 12);
   this.passwordChangedAt = new Date(Date.now() - 1000);
-  next();
 });
 
 UserSchema.methods.comparePassword = async function (

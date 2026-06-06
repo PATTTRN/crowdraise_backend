@@ -1,0 +1,6 @@
+{
+  "watch": ["."],
+  "ext": "ts,json",
+  "ignore": ["dist", "node_modules"],
+  "exec": "ts-node --compiler-options '{\"types\":[\"node\"]}' ./bin/www.ts"
+}
